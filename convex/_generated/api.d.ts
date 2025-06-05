@@ -20,6 +20,7 @@ import type * as http from "../http.js";
 import type * as reports from "../reports.js";
 import type * as router from "../router.js";
 import type * as sessions from "../sessions.js";
+import type * as storage from "../storage.js";
 import type * as users from "../users.js";
 
 /**
@@ -38,6 +39,7 @@ declare const fullApi: ApiFromModules<{
   reports: typeof reports;
   router: typeof router;
   sessions: typeof sessions;
+  storage: typeof storage;
   users: typeof users;
 }>;
 export declare const api: FilterApi<

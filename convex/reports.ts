@@ -117,3 +117,26 @@ export const generateAttendanceReport = query({
     };
   },
 });
+
+export const getSessionsForCourse = query({
+  args: { courseId: v.id("courses") },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) return [];
+
+    // Verify user is teacher of this course
+    const course = await ctx.db.get(args.courseId);
+    if (!course || course.teacherId !== userId) {
+      return [];
+    }
+
+    // Get all sessions for the course, ordered by startTime descending
+    const sessions = await ctx.db
+      .query("sessions")
+      .withIndex("by_course", q => q.eq("courseId", args.courseId))
+      .order("desc")
+      .collect();
+
+    return sessions;
+  },
+});
