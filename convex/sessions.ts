@@ -211,6 +211,7 @@ export const validateQRCode = query({
 export const markAttendance = mutation({
   args: {
     sessionId: v.id("sessions"),
+    liveImageId: v.id("_storage"), // Added
     studentLocation: v.optional(v.object({
       latitude: v.number(),
       longitude: v.number(),
@@ -295,9 +296,53 @@ export const markAttendance = mutation({
       markedAt: Date.now(),
       location: args.studentLocation,
       status,
+      liveImageId: args.liveImageId, // Added
+      verificationStatus: "pending", // Added
     });
 
     return { success: true, status };
+  },
+});
+
+export const verifyImage = mutation({
+  args: {
+    attendanceId: v.id("attendance"),
+    status: v.union(v.literal("verified"), v.literal("rejected")),
+  },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) throw new Error("Not authenticated");
+
+    // Check if user is a teacher
+    const userProfile = await ctx.db
+      .query("userProfiles")
+      .withIndex("by_user", (q) => q.eq("userId", userId))
+      .unique();
+
+    if (!userProfile || userProfile.role !== "teacher") {
+      throw new Error("Not authorized. Only teachers can verify images.");
+    }
+
+    const attendanceRecord = await ctx.db.get(args.attendanceId);
+    if (!attendanceRecord) {
+      throw new Error("Attendance record not found.");
+    }
+
+    const session = await ctx.db.get(attendanceRecord.sessionId);
+    if (!session) {
+      throw new Error("Session not found for this attendance record.");
+    }
+
+    // Verify the current user is the teacher of the course for this session
+    if (session.teacherId !== userId) {
+      throw new Error("Not authorized to verify images for this course.");
+    }
+
+    await ctx.db.patch(args.attendanceId, {
+      verificationStatus: args.status,
+    });
+
+    return { success: true };
   },
 });
 
