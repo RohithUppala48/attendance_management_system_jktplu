@@ -86,6 +86,12 @@ const applicationTables = {
       v.literal("late"),
       v.literal("absent")
     ),
+    liveImageId: v.optional(v.id("_storage")),
+    verificationStatus: v.optional(v.union(
+      v.literal("pending"),
+      v.literal("verified"),
+      v.literal("rejected")
+    )),
   })
     .index("by_session", ["sessionId"])
     .index("by_student", ["studentId"])
