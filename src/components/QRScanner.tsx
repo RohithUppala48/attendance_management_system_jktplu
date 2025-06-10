@@ -1,10 +1,10 @@
-import React, { useEffect, useState, useCallback } from "react";
+import React, { useEffect, useState, useCallback, useRef } from "react";
 import { Html5QrcodeScanner } from "html5-qrcode";
 import { useMutation, useQuery } from "convex/react";
 import { api } from "../../convex/_generated/api";
 import { Id } from "../../convex/_generated/dataModel";
 import { toast } from "sonner";
-import { ImageCapture } from "./ImageCapture"; // To be created later
+import { ImageCapture } from "./ImageCapture";
 
 export function QRScanner() {
   const [scanning, setScanning] = useState(true);
@@ -12,64 +12,152 @@ export function QRScanner() {
   const [qrData, setQrData] = useState<string | null>(null);
   const [showImageCapture, setShowImageCapture] = useState(false);
   const [capturedImageFile, setCapturedImageFile] = useState<File | null>(null);
+  const [locationPermission, setLocationPermission] = useState<"granted" | "denied" | "prompt">("prompt");
+  const [currentLocation, setCurrentLocation] = useState<{ latitude: number; longitude: number } | null>(null);
+  const [isGettingLocation, setIsGettingLocation] = useState(false);
+  const scannerRef = useRef<Html5QrcodeScanner | null>(null);
+  const qrReaderRef = useRef<HTMLDivElement>(null);
+  const [isScannerInitialized, setIsScannerInitialized] = useState(false);
 
   const user = useQuery(api.auth.loggedInUser);
   const validateResult = useQuery(api.sessions.validateQRCode,
-    qrData ? { encryptedData: qrData, studentLocation: undefined } : "skip"
+    qrData ? { 
+      encryptedData: qrData, 
+      studentLocation: currentLocation || undefined 
+    } : "skip"
   );
   const markAttendance = useMutation(api.sessions.markAttendance);
   const generateUploadUrl = useMutation(api.storage.generateUploadUrl);
 
+  // Initialize QR Scanner
   useEffect(() => {
-    let scannerInstance: Html5QrcodeScanner | null = null;
-    if (!user || showImageCapture) {
-      if (scannerInstance) {
-        // This check might be redundant if scannerInstance is declared inside useEffect scope correctly
-        // but as a safeguard:
-        scannerInstance.clear().catch(console.error);
-        scannerInstance = null;
+    let scanner: Html5QrcodeScanner | null = null;
+
+    const initializeScanner = () => {
+      if (!scanning || showImageCapture || isScannerInitialized) {
+        return;
       }
-      return;
-    }
 
-    // Only initialize if not showing image capture and user is logged in
-    if (!showImageCapture && user && document.getElementById("qr-reader")) {
-      scannerInstance = new Html5QrcodeScanner("qr-reader", {
-        qrbox: { width: 250, height: 250 },
-        fps: 10,
-      });
-      scannerInstance.render(handleScan, handleError);
-    }
+      try {
+        // Clean up any existing scanner
+        if (scannerRef.current) {
+          scannerRef.current.clear().catch(console.error);
+          scannerRef.current = null;
+        }
 
-    return () => {
-      if (scannerInstance) {
-        scannerInstance.clear().catch(err => {
-          // Check if the error is about the element not being found, which can happen on rapid navigation
-          if (!err.message.includes("HTML Element with id")) {
-            console.error("Error clearing scanner:", err);
+        // Initialize new scanner
+        scanner = new Html5QrcodeScanner(
+          "qr-reader",
+          { 
+            fps: 10, 
+            qrbox: { width: 250, height: 250 },
+            aspectRatio: 1.0
+          },
+          false
+        );
+
+        scannerRef.current = scanner;
+
+        scanner.render(
+          (decodedText) => {
+            setQrData(decodedText);
+            setScanning(false);
+            setShowImageCapture(true);
+          },
+          (errorMessage) => {
+            console.warn("QR Scan Error:", errorMessage);
+            if (scanning && !showImageCapture) {
+              setError(`QR Scanning Error. Please try again.`);
+            }
           }
-        });
-        scannerInstance = null;
+        );
+
+        setIsScannerInitialized(true);
+      } catch (err) {
+        console.error("Error initializing QR scanner:", err);
+        setError("Failed to initialize QR scanner. Please refresh the page.");
       }
     };
-  }, [user, showImageCapture]); // Dependency array
 
-  async function handleScan(decodedText: string) {
-    if (!user) {
-      setError("Please log in to mark attendance");
+    // Add a small delay to ensure DOM is ready
+    const timer = setTimeout(() => {
+      initializeScanner();
+    }, 500);
+
+    // Cleanup function
+    return () => {
+      clearTimeout(timer);
+      if (scannerRef.current) {
+        scannerRef.current.clear().catch(console.error);
+        scannerRef.current = null;
+      }
+      setIsScannerInitialized(false);
+    };
+  }, [scanning, showImageCapture]);
+
+  // Reset scanner when switching back to scanning
+  useEffect(() => {
+    if (scanning && !showImageCapture) {
+      setIsScannerInitialized(false);
+    }
+  }, [scanning, showImageCapture]);
+
+  // Request location permission and get current location
+  useEffect(() => {
+    async function getLocationPermission() {
+      try {
+        const permission = await navigator.permissions.query({ name: 'geolocation' });
+        setLocationPermission(permission.state);
+
+        permission.addEventListener('change', () => {
+          setLocationPermission(permission.state);
+        });
+
+        if (permission.state === 'granted') {
+          getCurrentLocation();
+        }
+      } catch (err) {
+        console.error('Error checking location permission:', err);
+        setLocationPermission('denied');
+      }
+    }
+
+    getLocationPermission();
+  }, []);
+
+  const getCurrentLocation = useCallback(() => {
+    if (!navigator.geolocation) {
+      setError('Geolocation is not supported by your browser');
       return;
     }
-    setQrData(decodedText);
-    setScanning(false);
-    setError(null); // Clear previous errors
-    setShowImageCapture(true);
-  }
 
-  const handleImageCaptured = useCallback((imageFile: File) => {
-    setCapturedImageFile(imageFile);
-    setShowImageCapture(false);
-    // setError(null); // Clear any errors from QR scan phase if needed
+    setIsGettingLocation(true);
+    navigator.geolocation.getCurrentPosition(
+      (position) => {
+        setCurrentLocation({
+          latitude: position.coords.latitude,
+          longitude: position.coords.longitude
+        });
+        setError(null);
+        setIsGettingLocation(false);
+      },
+      (error) => {
+        console.error('Error getting location:', error);
+        setError('Unable to get your location. Please enable location services.');
+        setIsGettingLocation(false);
+      },
+      { 
+        enableHighAccuracy: true,
+        timeout: 10000,
+        maximumAge: 0
+      }
+    );
   }, []);
+
+  function handleImageCaptured(file: File) {
+    setCapturedImageFile(file);
+    setShowImageCapture(false);
+  }
 
   useEffect(() => {
     async function processQRCode() {
@@ -80,7 +168,7 @@ export function QRScanner() {
       // Validate QR code result first
       if (!validateResult.valid) {
         setError(validateResult.error || "Invalid QR code.");
-        setScanning(true); // Allow rescan
+        setScanning(true);
         setQrData(null);
         setCapturedImageFile(null);
         setShowImageCapture(false);
@@ -96,7 +184,25 @@ export function QRScanner() {
         return;
       }
 
-      setScanning(false); // Keep false to show processing message for upload/mark attendance
+      // Check if location is required and available
+      if (validateResult.requiresLocation) {
+        if (!currentLocation) {
+          setError("Location access is required to mark attendance. Please enable location services.");
+          setScanning(true);
+          setQrData(null);
+          setCapturedImageFile(null);
+          setShowImageCapture(false);
+          return;
+        }
+
+        // If location is required but not yet obtained, try to get it
+        if (!currentLocation && !isGettingLocation) {
+          getCurrentLocation();
+          return;
+        }
+      }
+
+      setScanning(false);
 
       try {
         const postUrl = await generateUploadUrl();
@@ -119,37 +225,26 @@ export function QRScanner() {
         await markAttendance({
           sessionId: validateResult.sessionId as Id<"sessions">,
           liveImageId: storageId as Id<"_storage">,
-          studentLocation: undefined
+          studentLocation: currentLocation || undefined
         });
 
-        toast.success("Attendance marked successfully with image!");
-        setError(null); // Clear any previous errors on success
+        toast.success("Attendance marked successfully!");
+        setError(null);
       } catch (err) {
         setError(err instanceof Error ? err.message : "An error occurred.");
         console.error(err);
-      } finally {
-        // Reset state for the next scan attempt regardless of success or failure
-        setScanning(true);
-        setQrData(null);
-        setCapturedImageFile(null);
-        setShowImageCapture(false);
       }
+      // Reset state for the next scan attempt
+      setScanning(true);
+      setQrData(null);
+      setCapturedImageFile(null);
+      setShowImageCapture(false);
     }
 
-    // Only run if we have a captured image and valid QR data
     if (capturedImageFile && qrData && validateResult) {
-        processQRCode();
+      processQRCode();
     }
-  }, [qrData, validateResult, capturedImageFile, user, markAttendance, generateUploadUrl]);
-
-  // html5-qrcode calls this with a string message for error
-  function handleError(errorMessage: string) {
-    console.warn("QR Scan Error reported by library:", errorMessage);
-    // Only update UI error if we are in scanning phase and not already showing image capture
-    if (scanning && !showImageCapture) {
-      setError(`QR Scanning Error. Please try again.`);
-    }
-  }
+  }, [qrData, validateResult, capturedImageFile, user, markAttendance, generateUploadUrl, currentLocation, isGettingLocation, getCurrentLocation]);
 
   if (!user) {
     return (
@@ -161,21 +256,49 @@ export function QRScanner() {
 
   return (
     <div className="flex flex-col items-center gap-4 p-4">
-      {/* QR Reader Element: Only shown when not capturing image and scanning is true or qrData is null (initial state) */}
-      {!showImageCapture && <div id="qr-reader" className="w-full max-w-md"></div>}
+      {/* Location Permission Status */}
+      {locationPermission === "denied" && (
+        <div className="w-full max-w-md p-4 bg-red-100 border border-red-400 text-red-700 rounded-md mb-4">
+          <p className="font-medium">Location Access Required</p>
+          <p className="text-sm">Please enable location services to mark attendance.</p>
+          <button
+            onClick={() => getCurrentLocation()}
+            className="mt-2 px-4 py-2 bg-red-600 text-white rounded-md hover:bg-red-700 transition-colors"
+          >
+            Enable Location
+          </button>
+        </div>
+      )}
+
+      {/* Location Loading State */}
+      {isGettingLocation && (
+        <div className="w-full max-w-md p-4 bg-blue-100 border border-blue-400 text-blue-700 rounded-md mb-4">
+          <p className="font-medium">Getting Location</p>
+          <p className="text-sm">Please wait while we get your current location...</p>
+        </div>
+      )}
+
+      {/* QR Reader Element - Added a container div with fixed dimensions */}
+      {!showImageCapture && scanning && (
+        <div className="w-full max-w-md">
+          <div ref={qrReaderRef} id="qr-reader" className="w-full h-[300px]"></div>
+        </div>
+      )}
       
       {/* Image Capture Placeholder UI */}
       {showImageCapture && (
-        <ImageCapture
-          onImageCaptured={handleImageCaptured}
-          onCancel={() => {
-            setShowImageCapture(false);
-            setQrData(null);
-            setCapturedImageFile(null);
-            setScanning(true);
-            setError(null);
-          }}
-        />
+        <div className="w-full max-w-md">
+          <ImageCapture
+            onImageCaptured={handleImageCaptured}
+            onCancel={() => {
+              setShowImageCapture(false);
+              setQrData(null);
+              setCapturedImageFile(null);
+              setScanning(true);
+              setError(null);
+            }}
+          />
+        </div>
       )}
 
       {/* Error Display */}
@@ -192,10 +315,21 @@ export function QRScanner() {
         </div>
       )}
 
-      {!error && !scanning && !showImageCapture && capturedImageFile && ( // This state means processing is happening
-         <div className="text-green-600 text-sm mt-2 font-medium">
+      {!error && !scanning && !showImageCapture && capturedImageFile && (
+        <div className="text-green-600 text-sm mt-2 font-medium">
           Processing image and marking attendance... Please wait.
         </div>
+      )}
+
+      {/* Manual Upload Button */}
+      {!showImageCapture && !qrData && (
+        <button
+          onClick={() => setShowImageCapture(true)}
+          className="mt-4 px-6 py-3 bg-blue-600 text-white rounded-md hover:bg-blue-700 transition-colors flex items-center gap-2"
+        >
+          <span>📷</span>
+          <span>Upload Photo Manually</span>
+        </button>
       )}
     </div>
   );

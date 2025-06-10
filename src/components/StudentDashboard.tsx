@@ -9,20 +9,11 @@ type Tab = "scan" | "history";
 export function StudentDashboard() {
   const [activeTab, setActiveTab] = useState<Tab>("scan");
   const courses = useQuery(api.courses.getStudentCourses);
-  const userProfile = useQuery(api.users.getUserProfile);
 
   const tabs = [
     { id: "scan" as Tab, label: "Scan QR", icon: "📱" },
     { id: "history" as Tab, label: "History", icon: "📋" },
   ];
-
-  if (!userProfile) {
-    return (
-      <div className="flex items-center justify-center min-h-screen">
-        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600"></div>
-      </div>
-    );
-  }
 
   return (
     <div className="max-w-4xl mx-auto">

@@ -92,6 +92,9 @@ const applicationTables = {
       v.literal("verified"),
       v.literal("rejected")
     )),
+    verificationComment: v.optional(v.string()),
+    verifiedAt: v.optional(v.number()),
+    verifiedBy: v.optional(v.id("users")),
   })
     .index("by_session", ["sessionId"])
     .index("by_student", ["studentId"])

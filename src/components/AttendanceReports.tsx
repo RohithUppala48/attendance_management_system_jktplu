@@ -5,7 +5,7 @@ import { Id } from "../../convex/_generated/dataModel"; // Added
 import { toast } from "sonner"; // Added
 
 // Helper component to display image from Convex storage
-function AttendanceImage({ liveImageId }: { liveImageId?: Id<"_storage"> | null }) {
+function AttendanceImage({ liveImageId, className = "w-16 h-16" }: { liveImageId?: Id<"_storage"> | null, className?: string }) {
   const imageUrl = useQuery(
     api.storage.getUrl,
     liveImageId ? { storageId: liveImageId } : "skip"
@@ -25,15 +25,99 @@ function AttendanceImage({ liveImageId }: { liveImageId?: Id<"_storage"> | null 
     <img
       src={imageUrl}
       alt="Student's live image"
-      className="w-16 h-16 object-cover rounded-md shadow-sm"
+      className={`object-cover rounded-md shadow-sm ${className}`}
       onError={(e) => (e.currentTarget.alt = "Error displaying image")}
     />
+  );
+}
+
+// Image Preview Modal
+function ImagePreviewModal({ 
+  imageId, 
+  onClose, 
+  onVerify, 
+  onReject, 
+  onRevert,
+  verificationStatus,
+  isPending
+}: { 
+  imageId: Id<"_storage">, 
+  onClose: () => void,
+  onVerify: (comment: string) => void,
+  onReject: (comment: string) => void,
+  onRevert: () => void,
+  verificationStatus?: "pending" | "verified" | "rejected",
+  isPending: boolean
+}) {
+  const [comment, setComment] = useState("");
+
+  return (
+    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+      <div className="bg-white rounded-lg p-6 max-w-2xl w-full mx-4">
+        <div className="flex justify-between items-start mb-4">
+          <h3 className="text-lg font-semibold">Attendance Image Verification</h3>
+          <button
+            onClick={onClose}
+            className="text-gray-500 hover:text-gray-700"
+          >
+            ✕
+          </button>
+        </div>
+        
+        <div className="mb-4">
+          <AttendanceImage liveImageId={imageId} className="w-full h-64" />
+        </div>
+
+        <div className="mb-4">
+          <label className="block text-sm font-medium text-gray-700 mb-1">
+            Verification Comment
+          </label>
+          <textarea
+            value={comment}
+            onChange={(e) => setComment(e.target.value)}
+            className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+            rows={3}
+            placeholder="Add a comment about the verification..."
+          />
+        </div>
+
+        <div className="flex justify-end space-x-2">
+          {verificationStatus === "pending" ? (
+            <>
+              <button
+                onClick={() => onVerify(comment)}
+                disabled={isPending}
+                className="px-4 py-2 bg-green-600 text-white rounded-md hover:bg-green-700 disabled:opacity-50 transition-colors"
+              >
+                Verify
+              </button>
+              <button
+                onClick={() => onReject(comment)}
+                disabled={isPending}
+                className="px-4 py-2 bg-red-600 text-white rounded-md hover:bg-red-700 disabled:opacity-50 transition-colors"
+              >
+                Reject
+              </button>
+            </>
+          ) : (
+            <button
+              onClick={onRevert}
+              disabled={isPending}
+              className="px-4 py-2 bg-yellow-600 text-white rounded-md hover:bg-yellow-700 disabled:opacity-50 transition-colors"
+            >
+              Revert to Pending
+            </button>
+          )}
+        </div>
+      </div>
+    </div>
   );
 }
 
 export function AttendanceReports() {
   const [selectedCourse, setSelectedCourse] = useState<Id<"courses"> | "">("");
   const [selectedSession, setSelectedSession] = useState<Id<"sessions"> | "">("");
+  const [selectedAttendance, setSelectedAttendance] = useState<{ id: Id<"attendance">, imageId: Id<"_storage"> } | null>(null);
 
   const courses = useQuery(api.courses.getTeacherCourses);
   // Assuming a query like getSessionsForCourse exists or will be created.
@@ -52,20 +136,14 @@ export function AttendanceReports() {
 
   const verifyImageMutation = useMutation(api.sessions.verifyImage);
 
-  async function handleVerify(attendanceId: Id<"attendance">, status: "verified" | "rejected" | "pending") {
-    const confirmationMessage =
-      status === "pending"
-      ? "Are you sure you want to revert this image verification to pending?"
-      : `Are you sure you want to mark this image as ${status}?`;
-
-    if (window.confirm(confirmationMessage)) {
-      try {
-        await verifyImageMutation({ attendanceId, status });
-        toast.success(`Image status updated to ${status}.`);
-      } catch (error) {
-        console.error("Failed to verify image:", error);
-        toast.error(error instanceof Error ? error.message : "Failed to update status.");
-      }
+  async function handleVerify(attendanceId: Id<"attendance">, status: "verified" | "rejected" | "pending", comment: string = "") {
+    try {
+      await verifyImageMutation({ attendanceId, status, comment });
+      toast.success(`Image status updated to ${status}.`);
+      setSelectedAttendance(null); // Close the modal
+    } catch (error) {
+      console.error("Failed to verify image:", error);
+      toast.error(error instanceof Error ? error.message : "Failed to update status.");
     }
   }
 
@@ -165,7 +243,16 @@ export function AttendanceReports() {
                         </span>
                       </td>
                       <td className="px-4 py-3 whitespace-nowrap">
-                        <AttendanceImage liveImageId={record.liveImageId} />
+                        {record.liveImageId ? (
+                          <button
+                            onClick={() => setSelectedAttendance({ id: record._id, imageId: record.liveImageId! })}
+                            className="hover:opacity-75 transition-opacity"
+                          >
+                            <AttendanceImage liveImageId={record.liveImageId} />
+                          </button>
+                        ) : (
+                          <span className="text-xs text-gray-400">No Image</span>
+                        )}
                       </td>
                       <td className="px-4 py-3 whitespace-nowrap">
                         <span className={`inline-flex px-2 py-1 text-xs font-semibold rounded-full ${statusColorClass}`}>
@@ -173,38 +260,13 @@ export function AttendanceReports() {
                         </span>
                       </td>
                       <td className="px-4 py-3 whitespace-nowrap text-sm space-x-2">
-                        {!record.liveImageId ? (
-                          <span className="text-xs text-gray-400">No Image</span>
-                        ) : (
-                          <>
-                            {(verificationStatus === "pending") && (
-                              <>
-                                <button
-                                  onClick={() => handleVerify(record._id, "verified")}
-                                  disabled={verifyImageMutation.isPending}
-                                  className="px-2 py-1 text-xs text-white bg-green-500 hover:bg-green-600 rounded-md disabled:opacity-50 transition-colors"
-                                >
-                                  Verify
-                                </button>
-                                <button
-                                  onClick={() => handleVerify(record._id, "rejected")}
-                                  disabled={verifyImageMutation.isPending}
-                                  className="px-2 py-1 text-xs text-white bg-red-500 hover:bg-red-600 rounded-md disabled:opacity-50 transition-colors"
-                                >
-                                  Reject
-                                </button>
-                              </>
-                            )}
-                            {(verificationStatus === "verified" || verificationStatus === "rejected") && (
-                              <button
-                                onClick={() => handleVerify(record._id, "pending")}
-                                disabled={verifyImageMutation.isPending}
-                                className="px-2 py-1 text-xs text-white bg-yellow-500 hover:bg-yellow-600 rounded-md disabled:opacity-50 transition-colors"
-                              >
-                                Revert to Pending
-                              </button>
-                            )}
-                          </>
+                        {record.liveImageId && (
+                          <button
+                            onClick={() => setSelectedAttendance({ id: record._id, imageId: record.liveImageId! })}
+                            className="px-2 py-1 text-xs text-white bg-blue-500 hover:bg-blue-600 rounded-md transition-colors"
+                          >
+                            View Image
+                          </button>
                         )}
                       </td>
                     </tr>
@@ -232,6 +294,19 @@ export function AttendanceReports() {
           <h3 className="text-lg font-medium text-gray-900 mb-2">Select a Course First</h3>
           <p className="text-gray-600">Choose a course to load available sessions for verification.</p>
         </div>
+      )}
+
+      {/* Image Preview Modal */}
+      {selectedAttendance && (
+        <ImagePreviewModal
+          imageId={selectedAttendance.imageId}
+          onClose={() => setSelectedAttendance(null)}
+          onVerify={(comment) => handleVerify(selectedAttendance.id, "verified", comment)}
+          onReject={(comment) => handleVerify(selectedAttendance.id, "rejected", comment)}
+          onRevert={() => handleVerify(selectedAttendance.id, "pending")}
+          verificationStatus={attendanceRecords?.find(r => r._id === selectedAttendance.id)?.verificationStatus}
+          isPending={verifyImageMutation.isPending}
+        />
       )}
     </div>
   );

@@ -186,7 +186,15 @@ export const validateQRCode = query({
     }
 
     // Check location if GPS-based
-    if (session.location.type === "gps" && args.studentLocation) {
+    if (session.location.type === "gps") {
+      if (!args.studentLocation) {
+        return { 
+          valid: false, 
+          error: "Location access is required for this session",
+          requiresLocation: true
+        };
+      }
+
       const distance = calculateDistance(
         session.location.latitude!,
         session.location.longitude!,
@@ -195,7 +203,11 @@ export const validateQRCode = query({
       );
 
       if (distance > (session.location.radius || 100)) {
-        return { valid: false, error: "Location verification failed" };
+        return { 
+          valid: false, 
+          error: `You must be within ${session.location.radius || 100}m of the session location. Current distance: ${Math.round(distance)}m`,
+          requiresLocation: true
+        };
       }
     }
 
@@ -204,6 +216,7 @@ export const validateQRCode = query({
       sessionId: session._id,
       courseId: session.courseId,
       sessionName: session.sessionName,
+      requiresLocation: session.location.type === "gps"
     };
   },
 });
@@ -211,7 +224,7 @@ export const validateQRCode = query({
 export const markAttendance = mutation({
   args: {
     sessionId: v.id("sessions"),
-    liveImageId: v.id("_storage"), // Added
+    liveImageId: v.id("_storage"),
     studentLocation: v.optional(v.object({
       latitude: v.number(),
       longitude: v.number(),
@@ -257,7 +270,11 @@ export const markAttendance = mutation({
     }
 
     // Check location if GPS-based
-    if (session.location.type === "gps" && args.studentLocation) {
+    if (session.location.type === "gps") {
+      if (!args.studentLocation) {
+        throw new Error("Location access is required for this session");
+      }
+
       const distance = calculateDistance(
         session.location.latitude!,
         session.location.longitude!,
@@ -275,7 +292,7 @@ export const markAttendance = mutation({
           location: args.studentLocation,
           details: `Distance: ${Math.round(distance)}m, Max allowed: ${session.location.radius || 100}m`
         });
-        throw new Error("Location verification failed");
+        throw new Error(`You must be within ${session.location.radius || 100}m of the session location. Current distance: ${Math.round(distance)}m`);
       }
     }
 
@@ -296,8 +313,8 @@ export const markAttendance = mutation({
       markedAt: Date.now(),
       location: args.studentLocation,
       status,
-      liveImageId: args.liveImageId, // Added
-      verificationStatus: "pending", // Added
+      liveImageId: args.liveImageId,
+      verificationStatus: "pending",
     });
 
     return { success: true, status };
@@ -307,39 +324,33 @@ export const markAttendance = mutation({
 export const verifyImage = mutation({
   args: {
     attendanceId: v.id("attendance"),
-    status: v.union(v.literal("verified"), v.literal("rejected")),
+    status: v.union(v.literal("verified"), v.literal("rejected"), v.literal("pending")),
+    comment: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);
     if (!userId) throw new Error("Not authenticated");
 
-    // Check if user is a teacher
-    const userProfile = await ctx.db
-      .query("userProfiles")
-      .withIndex("by_user", (q) => q.eq("userId", userId))
-      .unique();
+    // Get the attendance record
+    const attendance = await ctx.db.get(args.attendanceId);
+    if (!attendance) throw new Error("Attendance record not found");
 
-    if (!userProfile || userProfile.role !== "teacher") {
-      throw new Error("Not authorized. Only teachers can verify images.");
+    // Get the session to verify teacher permissions
+    const session = await ctx.db.get(attendance.sessionId);
+    if (!session) throw new Error("Session not found");
+
+    // Verify user is teacher of this course
+    const course = await ctx.db.get(session.courseId);
+    if (!course || course.teacherId !== userId) {
+      throw new Error("Not authorized to verify attendance");
     }
 
-    const attendanceRecord = await ctx.db.get(args.attendanceId);
-    if (!attendanceRecord) {
-      throw new Error("Attendance record not found.");
-    }
-
-    const session = await ctx.db.get(attendanceRecord.sessionId);
-    if (!session) {
-      throw new Error("Session not found for this attendance record.");
-    }
-
-    // Verify the current user is the teacher of the course for this session
-    if (session.teacherId !== userId) {
-      throw new Error("Not authorized to verify images for this course.");
-    }
-
+    // Update the verification status
     await ctx.db.patch(args.attendanceId, {
       verificationStatus: args.status,
+      verificationComment: args.comment,
+      verifiedAt: Date.now(),
+      verifiedBy: userId,
     });
 
     return { success: true };
