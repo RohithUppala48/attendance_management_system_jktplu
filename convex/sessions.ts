@@ -324,16 +324,20 @@ export const markAttendance = mutation({
 export const verifyImage = mutation({
   args: {
     attendanceId: v.id("attendance"),
-    status: v.union(v.literal("verified"), v.literal("rejected"), v.literal("pending")),
-    comment: v.optional(v.string()),
+    status: v.union(v.literal("verified"), v.literal("rejected")),
+    comment: v.optional(v.string())
   },
   handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);
     if (!userId) throw new Error("Not authenticated");
 
+    const { attendanceId, status, comment } = args;
+    
     // Get the attendance record
-    const attendance = await ctx.db.get(args.attendanceId);
-    if (!attendance) throw new Error("Attendance record not found");
+    const attendance = await ctx.db.get(attendanceId);
+    if (!attendance) {
+      throw new Error("Attendance record not found");
+    }
 
     // Get the session to verify teacher permissions
     const session = await ctx.db.get(attendance.sessionId);
@@ -345,13 +349,19 @@ export const verifyImage = mutation({
       throw new Error("Not authorized to verify attendance");
     }
 
-    // Update the verification status
-    await ctx.db.patch(args.attendanceId, {
-      verificationStatus: args.status,
-      verificationComment: args.comment,
+    // Update the attendance record
+    const updateData: any = {
+      verificationStatus: status,
       verifiedAt: Date.now(),
-      verifiedBy: userId,
-    });
+      verifiedBy: userId
+    };
+
+    // Only add comment if it exists
+    if (comment !== undefined) {
+      updateData.verificationComment = comment;
+    }
+
+    await ctx.db.patch(attendanceId, updateData);
 
     return { success: true };
   },

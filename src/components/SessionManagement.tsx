@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useQuery, useMutation } from "convex/react";
 import { api } from "../../convex/_generated/api";
 import { toast } from "sonner";
@@ -18,11 +18,45 @@ export function SessionManagement() {
   const [maxAttendanceTime, setMaxAttendanceTime] = useState("15");
   const [showQRCode, setShowQRCode] = useState<string | null>(null);
   const [qrCodeDataUrl, setQrCodeDataUrl] = useState<string | null>(null);
+  const [remainingTimes, setRemainingTimes] = useState<Record<string, string>>({});
 
   const courses = useQuery(api.courses.getTeacherCourses);
   const activeSessions = useQuery(api.sessions.getActiveSessions);
   const createSession = useMutation(api.sessions.createSession);
   const endSession = useMutation(api.sessions.endSession);
+
+  // Update remaining times every second
+  useEffect(() => {
+    if (!activeSessions) return;
+
+    const updateRemainingTimes = () => {
+      const now = Date.now();
+      const newRemainingTimes: Record<string, string> = {};
+
+      activeSessions.forEach(session => {
+        const expiryTime = session.startTime + (session.qrData.expiryMinutes * 60 * 1000);
+        const remaining = expiryTime - now;
+
+        if (remaining <= 0) {
+          newRemainingTimes[session._id] = "Expired";
+        } else {
+          const minutes = Math.floor(remaining / (60 * 1000));
+          const seconds = Math.floor((remaining % (60 * 1000)) / 1000);
+          newRemainingTimes[session._id] = `${minutes}:${seconds.toString().padStart(2, '0')}`;
+        }
+      });
+
+      setRemainingTimes(newRemainingTimes);
+    };
+
+    // Update immediately
+    updateRemainingTimes();
+
+    // Update every second
+    const interval = setInterval(updateRemainingTimes, 1000);
+
+    return () => clearInterval(interval);
+  }, [activeSessions]);
 
   const handleCreateSession = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -309,6 +343,9 @@ export function SessionManagement() {
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             {activeSessions.map((session) => {
               const course = courses?.find(c => c._id === session.courseId);
+              const remainingTime = remainingTimes[session._id] || "Calculating...";
+              const isExpired = remainingTime === "Expired";
+
               return (
                 <div key={session._id} className="bg-white rounded-lg shadow-md p-6">
                   <div className="flex justify-between items-start mb-4">
@@ -316,9 +353,18 @@ export function SessionManagement() {
                       <h4 className="text-lg font-semibold text-gray-900">{session.sessionName}</h4>
                       <p className="text-sm text-gray-600">{course?.name} ({course?.code})</p>
                     </div>
-                    <span className="bg-green-100 text-green-800 text-xs px-2 py-1 rounded-full">
-                      Active
-                    </span>
+                    <div className="flex flex-col items-end">
+                      <span className={`text-sm px-2 py-1 rounded-full ${
+                        isExpired 
+                          ? "bg-red-100 text-red-800" 
+                          : "bg-green-100 text-green-800"
+                      }`}>
+                        {isExpired ? "Expired" : "Active"}
+                      </span>
+                      <span className="text-xs text-gray-500 mt-1">
+                        Time Left: {remainingTime}
+                      </span>
+                    </div>
                   </div>
                   
                   <div className="space-y-2 text-sm text-gray-600 mb-4">
@@ -331,10 +377,15 @@ export function SessionManagement() {
                     <p><span className="font-medium">QR Expires:</span> {session.qrData.expiryMinutes} minutes</p>
                   </div>
 
-                  <div className="flex space-x-2">
+                  <div className="flex gap-2">
                     <button 
                       onClick={() => showQRCodeModal(session._id, session.qrData.encryptedData)}
-                      className="flex-1 bg-blue-600 text-white px-4 py-2 rounded-md hover:bg-blue-700 transition-colors text-sm"
+                      className={`flex-1 px-4 py-2 rounded-md text-sm transition-colors ${
+                        isExpired
+                          ? "bg-gray-400 cursor-not-allowed"
+                          : "bg-blue-600 text-white hover:bg-blue-700"
+                      }`}
+                      disabled={isExpired}
                     >
                       Show QR Code
                     </button>
